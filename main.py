@@ -21,15 +21,12 @@ SESSION_STRING = os.environ["TELEGRAM_SESSION"]
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 
-# Your Telegram chat ID
 BOT_CHAT_ID = os.environ["BOT_CHAT_ID"]
-
-# Esakki's Telegram chat ID
 FRIEND_CHAT_ID = os.environ["FRIEND_CHAT_ID"]
 
 
 # ============================================================
-# TELEGRAM NOTIFICATION RECIPIENTS
+# NOTIFICATION RECIPIENTS
 # ============================================================
 
 BOT_CHAT_IDS = [
@@ -58,7 +55,7 @@ TARGET_TYPES = {
 
 
 # ============================================================
-# EXACT AMOUNTS
+# EXACT ALLOWED AMOUNTS
 # ============================================================
 
 ALLOWED_AMOUNTS = {
@@ -83,7 +80,7 @@ ALLOWED_AMOUNTS = {
 
 
 # ============================================================
-# TIMEZONE / MONITORING WINDOW
+# TIMEZONE
 # ============================================================
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -93,7 +90,7 @@ END_TIME = time(12, 0, 0)
 
 
 # ============================================================
-# FLASK SERVER
+# FLASK
 # ============================================================
 
 app = Flask(__name__)
@@ -131,30 +128,7 @@ client = TelegramClient(
 
 
 # ============================================================
-# CHECK MONITORING TIME
-# ============================================================
-
-def is_allowed_time(message_time):
-
-    current_time = message_time.time()
-
-    return START_TIME <= current_time < END_TIME
-
-
-# ============================================================
-# EXTRACT TYPE + AMOUNT
-#
-# Handles messages like:
-#
-# **SAPRE 🔴 100**
-# **SAPRE 🟢 300**
-# **SAPRE 🟢 900**
-# **EMERD 🔴 8100**
-# **BCONE 🟢 24300**
-# **PARITY 🔴 729000**
-#
-# Emoji does not matter.
-# Markdown ** does not matter.
+# MESSAGE PARSER
 # ============================================================
 
 def extract_target_content(text):
@@ -162,7 +136,6 @@ def extract_target_content(text):
     if not text:
         return None
 
-    # Normalize whitespace/newlines
     normalized_text = re.sub(
         r"\s+",
         " ",
@@ -170,13 +143,13 @@ def extract_target_content(text):
     ).strip()
 
     # --------------------------------------------------------
-    # Find target type
+    # Find type
     # --------------------------------------------------------
 
     type_match = re.search(
         r"\b(PARITY|SAPRE|BCONE|EMERD)\b",
         normalized_text,
-        re.IGNORECASE
+        re.IGNORECASE,
     )
 
     if not type_match:
@@ -185,34 +158,32 @@ def extract_target_content(text):
     content_type = type_match.group(1).upper()
 
     # --------------------------------------------------------
-    # Everything after target type
+    # Get everything after type
     # --------------------------------------------------------
 
-    text_after_keyword = normalized_text[
+    text_after_type = normalized_text[
         type_match.end():
     ]
 
     # --------------------------------------------------------
-    # Find first whole number after type
+    # Find number
     #
-    # Examples:
+    # Supports:
+    #
     # SAPRE 🔴 900
     # SAPRE 🟢 2430
+    # **SAPRE 🟢 8100**
     # --------------------------------------------------------
 
     amount_match = re.search(
         r"\b(\d+)\b",
-        text_after_keyword
+        text_after_type,
     )
 
     if not amount_match:
         return None
 
-    try:
-        amount = int(amount_match.group(1))
-
-    except ValueError:
-        return None
+    amount = int(amount_match.group(1))
 
     return {
         "type": content_type,
@@ -222,7 +193,7 @@ def extract_target_content(text):
 
 
 # ============================================================
-# SEND NOTIFICATION TO BOTH USERS
+# SEND BOT MESSAGE
 # ============================================================
 
 def send_bot_notification(
@@ -245,78 +216,74 @@ def send_bot_notification(
         f"{message_text}"
     )
 
-    # --------------------------------------------------------
-    # Send to YOU + ESAKKI
-    # --------------------------------------------------------
-
     for chat_id in BOT_CHAT_IDS:
-
-        payload = {
-            "chat_id": chat_id,
-            "text": notification,
-        }
 
         try:
 
             response = requests.post(
                 url,
-                json=payload,
+                json={
+                    "chat_id": chat_id,
+                    "text": notification,
+                },
                 timeout=15,
             )
 
             if response.ok:
 
                 print(
-                    f"✅ Alert sent to {chat_id} | "
-                    f"{target_type} {amount}",
+                    f"✅ ALERT SENT → {chat_id}",
                     flush=True,
                 )
 
             else:
 
                 print(
-                    f"❌ Telegram Bot API error | "
-                    f"Chat: {chat_id} | "
-                    f"Status: {response.status_code} | "
-                    f"{response.text}",
+                    f"❌ BOT ERROR → {chat_id}",
+                    flush=True,
+                )
+
+                print(
+                    response.text,
                     flush=True,
                 )
 
         except Exception as error:
 
             print(
-                f"❌ Notification error | "
-                f"Chat: {chat_id} | "
-                f"{error}",
+                f"❌ SEND ERROR → {chat_id}: {error}",
                 flush=True,
             )
 
 
 # ============================================================
-# NEW TELEGRAM MESSAGE
+# PROCESS MESSAGE
 # ============================================================
 
-@client.on(events.NewMessage(chats=TARGET_GROUP))
-async def new_message_handler(event):
+async def process_message(event):
 
     try:
 
         # ----------------------------------------------------
-        # Convert Telegram timestamp to IST
+        # Telegram message time → IST
         # ----------------------------------------------------
 
         message_time = event.message.date.astimezone(IST)
 
         # ----------------------------------------------------
-        # ONLY 07:00 AM - 12:00 PM IST
+        # Ignore outside monitoring time
         # ----------------------------------------------------
 
-        if not is_allowed_time(message_time):
+        if not (
+            START_TIME
+            <= message_time.time()
+            < END_TIME
+        ):
 
             return
 
         # ----------------------------------------------------
-        # Get text
+        # Text
         # ----------------------------------------------------
 
         text = event.raw_text
@@ -326,17 +293,54 @@ async def new_message_handler(event):
             return
 
         # ----------------------------------------------------
-        # Extract type + amount
+        # IMPORTANT DEBUG
+        #
+        # This proves whether Render receives messages.
         # ----------------------------------------------------
 
-        extracted = extract_target_content(text)
+        print(
+            "\n📩 NEW GROUP MESSAGE",
+            flush=True,
+        )
 
-        if not extracted:
+        print(
+            f"Time: "
+            f"{message_time.strftime('%H:%M:%S')} IST",
+            flush=True,
+        )
+
+        print(
+            f"Text: {text}",
+            flush=True,
+        )
+
+        # ----------------------------------------------------
+        # Extract target
+        # ----------------------------------------------------
+
+        result = extract_target_content(text)
+
+        if not result:
+
+            print(
+                "Not a target message.",
+                flush=True,
+            )
 
             return
 
-        target_type = extracted["type"]
-        amount = extracted["amount"]
+        target_type = result["type"]
+        amount = result["amount"]
+
+        print(
+            f"Detected type: {target_type}",
+            flush=True,
+        )
+
+        print(
+            f"Detected amount: {amount}",
+            flush=True,
+        )
 
         # ----------------------------------------------------
         # Exact amount check
@@ -344,19 +348,19 @@ async def new_message_handler(event):
 
         if amount not in ALLOWED_AMOUNTS:
 
+            print(
+                f"Amount {amount} is NOT in allowed list.",
+                flush=True,
+            )
+
             return
 
         # ====================================================
-        # MATCH FOUND
+        # MATCH
         # ====================================================
 
         print(
-            "\n========================================",
-            flush=True,
-        )
-
-        print(
-            "🚨 MATCH FOUND",
+            "\n🚨🚨🚨 MATCH FOUND 🚨🚨🚨",
             flush=True,
         )
 
@@ -372,7 +376,7 @@ async def new_message_handler(event):
 
         print(
             f"Time   : "
-            f"{message_time.strftime('%Y-%m-%d %H:%M:%S')} IST",
+            f"{message_time.strftime('%H:%M:%S')} IST",
             flush=True,
         )
 
@@ -381,13 +385,8 @@ async def new_message_handler(event):
             flush=True,
         )
 
-        print(
-            "========================================",
-            flush=True,
-        )
-
         # ----------------------------------------------------
-        # Send notification to both users
+        # Send notification
         # ----------------------------------------------------
 
         await asyncio.to_thread(
@@ -401,7 +400,7 @@ async def new_message_handler(event):
     except Exception as error:
 
         print(
-            f"❌ Message handler error: "
+            f"❌ PROCESS MESSAGE ERROR: "
             f"{type(error).__name__}: {error}",
             flush=True,
         )
@@ -422,10 +421,6 @@ async def telegram_watcher():
                 flush=True,
             )
 
-            # ------------------------------------------------
-            # Connect using StringSession
-            # ------------------------------------------------
-
             await client.connect()
 
             print(
@@ -433,11 +428,9 @@ async def telegram_watcher():
                 flush=True,
             )
 
-            # ------------------------------------------------
-            # Check authorization
-            # ------------------------------------------------
-
-            authorized = await client.is_user_authorized()
+            authorized = (
+                await client.is_user_authorized()
+            )
 
             print(
                 f"Telegram authorized: {authorized}",
@@ -447,8 +440,7 @@ async def telegram_watcher():
             if not authorized:
 
                 print(
-                    "❌ ERROR: TELEGRAM_SESSION "
-                    "is not authorized or is invalid.",
+                    "❌ TELEGRAM SESSION IS NOT AUTHORIZED",
                     flush=True,
                 )
 
@@ -457,7 +449,7 @@ async def telegram_watcher():
                 return
 
             # ------------------------------------------------
-            # Get logged-in account
+            # Logged-in account
             # ------------------------------------------------
 
             me = await client.get_me()
@@ -476,7 +468,7 @@ async def telegram_watcher():
             )
 
             # ------------------------------------------------
-            # Find group
+            # Resolve group
             # ------------------------------------------------
 
             entity = await client.get_entity(
@@ -490,7 +482,26 @@ async def telegram_watcher():
             )
 
             print(
+                f"Group ID: {entity.id}",
+                flush=True,
+            )
+
+            print(
                 f"Watching group: {TARGET_GROUP}",
+                flush=True,
+            )
+
+            # =================================================
+            # REGISTER HANDLER USING RESOLVED ENTITY
+            # =================================================
+
+            client.add_event_handler(
+                process_message,
+                events.NewMessage(chats=entity),
+            )
+
+            print(
+                "✅ Message listener registered.",
                 flush=True,
             )
 
@@ -510,7 +521,7 @@ async def telegram_watcher():
             )
 
             print(
-                "Exact allowed amounts:",
+                "Allowed amounts:",
                 flush=True,
             )
 
@@ -522,17 +533,17 @@ async def telegram_watcher():
             )
 
             print(
-                "Notifications: YOU + ESAKKI",
+                "Notifications: YOU + FRIEND",
                 flush=True,
             )
 
             print(
-                "👀 Waiting for new messages...",
+                "👀 Waiting for NEW messages...",
                 flush=True,
             )
 
             # ------------------------------------------------
-            # Keep listening
+            # Keep connection alive
             # ------------------------------------------------
 
             await client.run_until_disconnected()
@@ -545,7 +556,7 @@ async def telegram_watcher():
         except Exception as error:
 
             print(
-                f"❌ Telegram error: "
+                f"❌ TELEGRAM ERROR: "
                 f"{type(error).__name__}: {error}",
                 flush=True,
             )
@@ -572,10 +583,7 @@ async def telegram_watcher():
 
 async def main():
 
-    # --------------------------------------------------------
-    # Start Flask health server
-    # --------------------------------------------------------
-
+    # Start health server
     flask_thread = threading.Thread(
         target=run_flask,
         daemon=True,
@@ -583,15 +591,12 @@ async def main():
 
     flask_thread.start()
 
-    # --------------------------------------------------------
-    # Start Telegram watcher
-    # --------------------------------------------------------
-
+    # Start Telegram
     await telegram_watcher()
 
 
 # ============================================================
-# START APPLICATION
+# START
 # ============================================================
 
 if __name__ == "__main__":
