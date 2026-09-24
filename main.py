@@ -20,7 +20,22 @@ API_HASH = os.environ["TELEGRAM_API_HASH"]
 SESSION_STRING = os.environ["TELEGRAM_SESSION"]
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
+
+# Your chat ID
 BOT_CHAT_ID = os.environ["BOT_CHAT_ID"]
+
+# Friend's chat ID
+FRIEND_CHAT_ID = os.environ["FRIEND_CHAT_ID"]
+
+
+# ============================================================
+# NOTIFICATION RECIPIENTS
+# ============================================================
+
+BOT_CHAT_IDS = [
+    BOT_CHAT_ID,
+    FRIEND_CHAT_ID,
+]
 
 
 # ============================================================
@@ -151,10 +166,10 @@ def extract_target_content(text):
     if not found_type:
         return None
 
-    # Everything after the target type
+    # Text after the target type
     remaining_text = normalized[type_position:]
 
-    # Find the first number after the type
+    # Find first number after the target type
     amount_match = re.search(
         r"\b(\d+(?:\.\d+)?)\b",
         remaining_text,
@@ -171,7 +186,7 @@ def extract_target_content(text):
     except ValueError:
         return None
 
-    # We only use whole-number amounts
+    # Only whole numbers are allowed
     if not amount.is_integer():
         return None
 
@@ -208,42 +223,46 @@ def send_bot_notification(
         f"{target_type} 🔴 {amount}"
     )
 
-    payload = {
-        "chat_id": BOT_CHAT_ID,
-        "text": notification,
-    }
+    # Send the same alert to both users
+    for chat_id in BOT_CHAT_IDS:
 
-    try:
+        payload = {
+            "chat_id": chat_id,
+            "text": notification,
+        }
 
-        response = requests.post(
-            url,
-            json=payload,
-            timeout=15,
-        )
+        try:
 
-        if response.ok:
-
-            print(
-                f"✅ Alert sent: "
-                f"{target_type} {amount}",
-                flush=True,
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=15,
             )
 
-        else:
+            if response.ok:
+
+                print(
+                    f"✅ Alert sent to {chat_id}: "
+                    f"{target_type} {amount}",
+                    flush=True,
+                )
+
+            else:
+
+                print(
+                    f"❌ Bot API error for {chat_id}: "
+                    f"{response.status_code} "
+                    f"{response.text}",
+                    flush=True,
+                )
+
+        except Exception as e:
 
             print(
-                f"❌ Bot API error: "
-                f"{response.status_code} "
-                f"{response.text}",
+                f"❌ Notification error for {chat_id}: "
+                f"{e}",
                 flush=True,
             )
-
-    except Exception as e:
-
-        print(
-            f"❌ Notification error: {e}",
-            flush=True,
-        )
 
 
 # ============================================================
@@ -256,13 +275,13 @@ async def new_message_handler(event):
     try:
 
         # ----------------------------------------------------
-        # Message time in IST
+        # Convert Telegram message time to IST
         # ----------------------------------------------------
 
         message_time = event.message.date.astimezone(IST)
 
         # ----------------------------------------------------
-        # Only 07:00 AM - 12:00 PM
+        # Only monitor 07:00 - 12:00 IST
         # ----------------------------------------------------
 
         if not is_allowed_time(message_time):
@@ -327,7 +346,7 @@ async def new_message_handler(event):
         )
 
         # ----------------------------------------------------
-        # Send bot notification
+        # Send to YOU + FRIEND
         # ----------------------------------------------------
 
         await asyncio.to_thread(
@@ -397,7 +416,7 @@ async def telegram_watcher():
                 return
 
             # ------------------------------------------------
-            # Logged-in account
+            # Logged-in Telegram account
             # ------------------------------------------------
 
             me = await client.get_me()
@@ -416,7 +435,7 @@ async def telegram_watcher():
             )
 
             # ------------------------------------------------
-            # Find group
+            # Find target group
             # ------------------------------------------------
 
             entity = await client.get_entity(
@@ -435,7 +454,7 @@ async def telegram_watcher():
             )
 
             # ------------------------------------------------
-            # Configuration information
+            # Configuration
             # ------------------------------------------------
 
             print(
@@ -459,6 +478,11 @@ async def telegram_watcher():
                 "90, 270, 810, 2430, 7290, "
                 "900, 2700, 8100, 24300, 72900, "
                 "9000, 27000, 81000, 243000, 729000",
+                flush=True,
+            )
+
+            print(
+                "Notifications: YOU + FRIEND",
                 flush=True,
             )
 
@@ -519,7 +543,7 @@ async def main():
 
 
 # ============================================================
-# START
+# START APPLICATION
 # ============================================================
 
 if __name__ == "__main__":
