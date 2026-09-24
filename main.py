@@ -2,35 +2,33 @@ import os
 import re
 import asyncio
 import threading
-from datetime import datetime, timezone, timedelta, time
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
 import requests
-from flask import Flask, jsonify
+from flask import Flask
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 
 
 # ============================================================
-# CONFIG
+# ENVIRONMENT VARIABLES
 # ============================================================
 
 API_ID = int(os.environ["TELEGRAM_API_ID"])
 API_HASH = os.environ["TELEGRAM_API_HASH"]
-
-# Telethon StringSession for your Telegram USER account
 SESSION_STRING = os.environ["TELEGRAM_SESSION"]
 
-# Telegram notification bot
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 BOT_CHAT_ID = os.environ["BOT_CHAT_ID"]
 
-# Telegram group/channel
+
+# ============================================================
+# SETTINGS
+# ============================================================
+
 TARGET_GROUP = "@colorwizclub2"
 
-# IST
-IST = timezone(timedelta(hours=5, minutes=30))
-
-# Alert types
 TARGET_TYPES = {
     "PARITY",
     "SAPRE",
@@ -38,8 +36,12 @@ TARGET_TYPES = {
     "EMERD",
 }
 
-# Minimum amount
 MIN_AMOUNT = 900
+
+IST = ZoneInfo("Asia/Kolkata")
+
+START_TIME = time(7, 0, 0)     # 07:00 AM
+END_TIME = time(12, 0, 0)      # 12:00 PM
 
 
 # ============================================================
@@ -56,142 +58,16 @@ def home():
 
 @app.route("/health")
 def health():
-    return jsonify({
-        "status": "ok",
-        "service": "telegram-900-watcher"
-    })
+    return "OK"
 
 
-# ============================================================
-# TIME CHECK
-# ============================================================
-
-def is_alert_time():
-    now = datetime.now(IST)
-    current_time = now.time()
-
-    start_time = time(7, 0, 0)
-    end_time = time(12, 0, 0)
-
-    return start_time <= current_time < end_time
-
-
-# ============================================================
-# EXTRACT TYPE + AMOUNT
-# ============================================================
-
-def extract_target_content(text):
-
-    if not text:
-        return None
-
-    # Normalize spaces/newlines
-    normalized_text = re.sub(
-        r"\s+",
-        " ",
-        text
-    ).strip()
-
-    # Find target type
-    type_match = re.search(
-        r"\b(PARITY|SAPRE|BCONE|EMERD)\b",
-        normalized_text,
-        re.IGNORECASE
+def run_flask():
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 10000)),
+        debug=False,
+        use_reloader=False,
     )
-
-    if not type_match:
-        return None
-
-    content_type = type_match.group(1).upper()
-
-    # Everything after target type
-    text_after_keyword = normalized_text[
-        type_match.end():
-    ]
-
-    # Find first number after target type
-    amount_match = re.search(
-        r"\b(\d+(?:\.\d+)?)\b",
-        text_after_keyword
-    )
-
-    if not amount_match:
-        return None
-
-    amount_text = amount_match.group(1)
-
-    if "." in amount_text:
-        amount = float(amount_text)
-    else:
-        amount = int(amount_text)
-
-    return {
-        "type": content_type,
-        "amount": amount,
-        "text": normalized_text
-    }
-
-
-# ============================================================
-# SEND TELEGRAM NOTIFICATION
-# ============================================================
-
-def send_notification(
-    content_type,
-    amount,
-    message_time,
-    original_text
-):
-
-    alert_text = (
-        "🚨 900+ ALERT\n\n"
-        f"Type: {content_type}\n"
-        f"Amount: {amount}\n"
-        f"Time: {message_time} IST\n\n"
-        f"{original_text}"
-    )
-
-    url = (
-        f"https://api.telegram.org/bot"
-        f"{BOT_TOKEN}/sendMessage"
-    )
-
-    payload = {
-        "chat_id": BOT_CHAT_ID,
-        "text": alert_text
-    }
-
-    try:
-
-        response = requests.post(
-            url,
-            json=payload,
-            timeout=15
-        )
-
-        if response.ok:
-
-            print(
-                f"[ALERT SENT] "
-                f"{content_type} | "
-                f"{amount} | "
-                f"{message_time}"
-            )
-
-        else:
-
-            print(
-                "[BOT ERROR]",
-                response.status_code,
-                response.text
-            )
-
-    except Exception as error:
-
-        print(
-            "[NOTIFICATION ERROR]",
-            error
-        )
 
 
 # ============================================================
@@ -201,8 +77,135 @@ def send_notification(
 client = TelegramClient(
     StringSession(SESSION_STRING),
     API_ID,
-    API_HASH
+    API_HASH,
 )
+
+
+# ============================================================
+# TIME CHECK
+# ============================================================
+
+def is_allowed_time():
+    now = datetime.now(IST).time()
+
+    return START_TIME <= now < END_TIME
+
+
+# ============================================================
+# MESSAGE PARSER
+# ============================================================
+
+def extract_target_content(text):
+    if not text:
+        return None
+
+    # Normalize text
+    normalized = text.upper().strip()
+
+    # Find target type
+    found_type = None
+    type_position = -1
+
+    for target_type in TARGET_TYPES:
+        match = re.search(
+            rf"\b{re.escape(target_type)}\b",
+            normalized,
+        )
+
+        if match:
+            found_type = target_type
+            type_position = match.end()
+            break
+
+    if not found_type:
+        return None
+
+    # Find first number after the target type
+    remaining_text = normalized[type_position:]
+
+    amount_match = re.search(
+        r"\b(\d+(?:\.\d+)?)\b",
+        remaining_text,
+    )
+
+    if not amount_match:
+        return None
+
+    amount_text = amount_match.group(1)
+
+    try:
+        amount = float(amount_text)
+    except ValueError:
+        return None
+
+    return {
+        "type": found_type,
+        "amount": amount,
+        "amount_text": amount_text,
+        "raw_text": text,
+    }
+
+
+# ============================================================
+# SEND TELEGRAM BOT ALERT
+# ============================================================
+
+def send_bot_notification(
+    target_type,
+    amount,
+    message_text,
+    message_time,
+):
+    url = (
+        f"https://api.telegram.org/bot"
+        f"{BOT_TOKEN}/sendMessage"
+    )
+
+    formatted_amount = (
+        str(int(amount))
+        if float(amount).is_integer()
+        else str(amount)
+    )
+
+    notification = (
+        "🚨 900+ ALERT\n\n"
+        f"Type: {target_type}\n"
+        f"Amount: {formatted_amount}\n"
+        f"Time: {message_time.strftime('%H:%M:%S')} IST\n\n"
+        f"{target_type} 🔴 {formatted_amount}"
+    )
+
+    payload = {
+        "chat_id": BOT_CHAT_ID,
+        "text": notification,
+    }
+
+    try:
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=15,
+        )
+
+        if response.ok:
+            print(
+                f"✅ Alert sent: "
+                f"{target_type} {formatted_amount}",
+                flush=True,
+            )
+        else:
+            print(
+                f"❌ Bot API error: "
+                f"{response.status_code} "
+                f"{response.text}",
+                flush=True,
+            )
+
+    except Exception as e:
+        print(
+            f"❌ Notification error: {e}",
+            flush=True,
+        )
 
 
 # ============================================================
@@ -213,95 +216,96 @@ client = TelegramClient(
 async def new_message_handler(event):
 
     try:
+        # ----------------------------------------------------
+        # Check IST time
+        # ----------------------------------------------------
 
-        # Current IST time
-        now = datetime.now(IST)
+        message_time = event.message.date.astimezone(IST)
 
-        # Only monitor 07:00 - 12:00 IST
-        if not is_alert_time():
+        current_time = message_time.time()
 
+        if not (
+            START_TIME <= current_time < END_TIME
+        ):
             return
 
-        # Only text/caption
+        # ----------------------------------------------------
+        # Get message text
+        # ----------------------------------------------------
+
         text = event.raw_text
 
         if not text:
-
             return
 
-        # Extract target + amount
-        extracted = extract_target_content(text)
+        # ----------------------------------------------------
+        # Parse target type + amount
+        # ----------------------------------------------------
 
-        if not extracted:
+        result = extract_target_content(text)
 
+        if not result:
             return
 
-        content_type = extracted["type"]
-        amount = extracted["amount"]
-        original_text = extracted["text"]
+        target_type = result["type"]
+        amount = result["amount"]
 
-        # Only 900+
+        # ----------------------------------------------------
+        # Minimum amount
+        # ----------------------------------------------------
+
         if amount < MIN_AMOUNT:
-
             return
 
-        # Message timestamp
-        message_date = event.message.date
-
-        if message_date.tzinfo is None:
-
-            message_date = message_date.replace(
-                tzinfo=timezone.utc
-            )
-
-        message_ist = message_date.astimezone(IST)
-
-        message_time = message_ist.strftime(
-            "%H:%M:%S"
+        formatted_amount = (
+            str(int(amount))
+            if float(amount).is_integer()
+            else str(amount)
         )
 
         print(
-            "\n========================================"
+            "\n🚨 MATCH FOUND",
+            flush=True,
         )
 
         print(
-            "🚨 MATCH FOUND"
+            f"Type: {target_type}",
+            flush=True,
         )
 
         print(
-            f"Type   : {content_type}"
+            f"Amount: {formatted_amount}",
+            flush=True,
         )
 
         print(
-            f"Amount : {amount}"
+            f"Time: "
+            f"{message_time.strftime('%H:%M:%S')} IST",
+            flush=True,
         )
 
         print(
-            f"Time   : {message_time}"
+            f"Message: {text}",
+            flush=True,
         )
 
-        print(
-            f"Text   : {original_text}"
-        )
+        # ----------------------------------------------------
+        # Send notification
+        # ----------------------------------------------------
 
-        print(
-            "========================================\n"
-        )
-
-        # Send Telegram notification
         await asyncio.to_thread(
-            send_notification,
-            content_type,
+            send_bot_notification,
+            target_type,
             amount,
+            text,
             message_time,
-            original_text
         )
 
-    except Exception as error:
+    except Exception as e:
 
         print(
-            "[MESSAGE HANDLER ERROR]",
-            error
+            f"❌ Message handler error: {type(e).__name__}: {e}",
+            flush=True,
         )
 
 
@@ -316,69 +320,121 @@ async def telegram_watcher():
         try:
 
             print(
-                "\nConnecting to Telegram..."
+                "Connecting to Telegram...",
+                flush=True,
             )
 
-            await client.start()
+            # ------------------------------------------------
+            # Connect without interactive login
+            # ------------------------------------------------
+
+            await client.connect()
 
             print(
-                "Telegram connected."
+                "Telegram transport connected.",
+                flush=True,
             )
+
+            # ------------------------------------------------
+            # Check StringSession authorization
+            # ------------------------------------------------
+
+            authorized = await client.is_user_authorized()
+
+            print(
+                f"Telegram authorized: {authorized}",
+                flush=True,
+            )
+
+            if not authorized:
+
+                print(
+                    "❌ ERROR: TELEGRAM_SESSION is "
+                    "not authorized or is invalid.",
+                    flush=True,
+                )
+
+                await client.disconnect()
+
+                return
+
+            # ------------------------------------------------
+            # Get logged-in Telegram account
+            # ------------------------------------------------
 
             me = await client.get_me()
 
-            if me:
+            username = (
+                f"@{me.username}"
+                if me.username
+                else "No username"
+            )
 
-                username = (
-                    f"@{me.username}"
-                    if me.username
-                    else ""
-                )
+            print(
+                f"✅ Logged in as: "
+                f"{me.first_name} "
+                f"({username})",
+                flush=True,
+            )
 
-                print(
-                    f"Logged in as: "
-                    f"{me.first_name or ''} "
-                    f"{username}"
-                )
+            # ------------------------------------------------
+            # Verify target group
+            # ------------------------------------------------
 
-            # Make sure group is accessible
             entity = await client.get_entity(
                 TARGET_GROUP
             )
 
             print(
-                f"Watching group: "
-                f"{getattr(entity, 'title', TARGET_GROUP)}"
+                f"✅ Group found: "
+                f"{getattr(entity, 'title', TARGET_GROUP)}",
+                flush=True,
             )
 
             print(
-                "Monitoring: 07:00 - 12:00 IST"
+                f"Watching group: {TARGET_GROUP}",
+                flush=True,
             )
 
             print(
-                "Minimum amount: 900"
+                "Monitoring time: "
+                "07:00 - 12:00 IST",
+                flush=True,
             )
 
             print(
-                "Types: PARITY | SAPRE | BCONE | EMERD"
+                "Minimum amount: 900",
+                flush=True,
             )
 
             print(
-                "\n👀 Waiting for new messages...\n"
+                "Types: "
+                "PARITY | SAPRE | BCONE | EMERD",
+                flush=True,
             )
 
-            # Stay connected
+            print(
+                "👀 Waiting for new messages...",
+                flush=True,
+            )
+
+            # ------------------------------------------------
+            # Keep Telegram connection alive
+            # ------------------------------------------------
+
             await client.run_until_disconnected()
 
-        except Exception as error:
-
             print(
-                "\nTelegram connection error:",
-                error
+                "⚠️ Telegram disconnected.",
+                flush=True,
             )
 
+        except Exception as e:
+
             print(
-                "Reconnecting in 10 seconds..."
+                f"❌ Telegram error: "
+                f"{type(e).__name__}: {e}",
+                flush=True,
             )
 
             try:
@@ -386,26 +442,12 @@ async def telegram_watcher():
             except Exception:
                 pass
 
+            print(
+                "🔄 Reconnecting in 10 seconds...",
+                flush=True,
+            )
+
             await asyncio.sleep(10)
-
-
-# ============================================================
-# RUN FLASK
-# ============================================================
-
-def run_flask():
-
-    port = int(
-        os.environ.get(
-            "PORT",
-            "10000"
-        )
-    )
-
-    app.run(
-        host="0.0.0.0",
-        port=port
-    )
 
 
 # ============================================================
@@ -414,30 +456,30 @@ def run_flask():
 
 async def main():
 
-    # Flask runs in background thread
+    # Start Flask health server
     flask_thread = threading.Thread(
         target=run_flask,
-        daemon=True
+        daemon=True,
     )
 
     flask_thread.start()
 
-    # Telegram watcher
+    # Start Telegram watcher
     await telegram_watcher()
 
 
 # ============================================================
-# START
+# START APPLICATION
 # ============================================================
 
 if __name__ == "__main__":
 
     try:
-
         asyncio.run(main())
 
     except KeyboardInterrupt:
 
         print(
-            "\nWatcher stopped."
+            "Application stopped.",
+            flush=True,
         )
