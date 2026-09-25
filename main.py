@@ -2,7 +2,8 @@ import os
 import re
 import asyncio
 import threading
-from datetime import time
+
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import requests
@@ -21,7 +22,10 @@ SESSION_STRING = os.environ["TELEGRAM_SESSION"]
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 
+# Your Telegram chat ID
 BOT_CHAT_ID = os.environ["BOT_CHAT_ID"]
+
+# Esakki's Telegram chat ID
 FRIEND_CHAT_ID = os.environ["FRIEND_CHAT_ID"]
 
 
@@ -85,12 +89,9 @@ ALLOWED_AMOUNTS = {
 
 IST = ZoneInfo("Asia/Kolkata")
 
-START_TIME = time(7, 0, 0)
-END_TIME = time(12, 0, 0)
-
 
 # ============================================================
-# FLASK
+# FLASK SERVER
 # ============================================================
 
 app = Flask(__name__)
@@ -98,7 +99,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Telegram watcher is running."
+    return "Telegram watcher is running 24 hours."
 
 
 @app.route("/health")
@@ -129,6 +130,14 @@ client = TelegramClient(
 
 # ============================================================
 # MESSAGE PARSER
+#
+# Supports:
+#
+# **SAPRE 🔴 900**
+# **SAPRE 🟢 900**
+# **EMERD 🔴 8100**
+# **BCONE 🟢 24300**
+# **PARITY 🔴 729000**
 # ============================================================
 
 def extract_target_content(text):
@@ -136,6 +145,7 @@ def extract_target_content(text):
     if not text:
         return None
 
+    # Normalize spaces/newlines
     normalized_text = re.sub(
         r"\s+",
         " ",
@@ -143,7 +153,7 @@ def extract_target_content(text):
     ).strip()
 
     # --------------------------------------------------------
-    # Find type
+    # Find target type
     # --------------------------------------------------------
 
     type_match = re.search(
@@ -158,7 +168,7 @@ def extract_target_content(text):
     content_type = type_match.group(1).upper()
 
     # --------------------------------------------------------
-    # Get everything after type
+    # Everything after target type
     # --------------------------------------------------------
 
     text_after_type = normalized_text[
@@ -166,13 +176,7 @@ def extract_target_content(text):
     ]
 
     # --------------------------------------------------------
-    # Find number
-    #
-    # Supports:
-    #
-    # SAPRE 🔴 900
-    # SAPRE 🟢 2430
-    # **SAPRE 🟢 8100**
+    # Find amount
     # --------------------------------------------------------
 
     amount_match = re.search(
@@ -183,7 +187,13 @@ def extract_target_content(text):
     if not amount_match:
         return None
 
-    amount = int(amount_match.group(1))
+    try:
+
+        amount = int(amount_match.group(1))
+
+    except ValueError:
+
+        return None
 
     return {
         "type": content_type,
@@ -193,7 +203,7 @@ def extract_target_content(text):
 
 
 # ============================================================
-# SEND BOT MESSAGE
+# SEND BOT NOTIFICATION
 # ============================================================
 
 def send_bot_notification(
@@ -212,9 +222,13 @@ def send_bot_notification(
         "🚨 ALERT\n\n"
         f"Type: {target_type}\n"
         f"Amount: {amount}\n"
-        f"Time: {message_time.strftime('%H:%M:%S')} IST\n\n"
+        f"Time: {message_time.strftime('%Y-%m-%d %H:%M:%S')} IST\n\n"
         f"{message_text}"
     )
+
+    # --------------------------------------------------------
+    # Send to YOU + ESAKKI
+    # --------------------------------------------------------
 
     for chat_id in BOT_CHAT_IDS:
 
@@ -251,13 +265,14 @@ def send_bot_notification(
         except Exception as error:
 
             print(
-                f"❌ SEND ERROR → {chat_id}: {error}",
+                f"❌ SEND ERROR → "
+                f"{chat_id}: {error}",
                 flush=True,
             )
 
 
 # ============================================================
-# PROCESS MESSAGE
+# PROCESS EVERY NEW GROUP MESSAGE — 24 HOURS
 # ============================================================
 
 async def process_message(event):
@@ -265,37 +280,22 @@ async def process_message(event):
     try:
 
         # ----------------------------------------------------
-        # Telegram message time → IST
+        # Telegram time → IST
         # ----------------------------------------------------
 
         message_time = event.message.date.astimezone(IST)
 
         # ----------------------------------------------------
-        # Ignore outside monitoring time
-        # ----------------------------------------------------
-
-        if not (
-            START_TIME
-            <= message_time.time()
-            < END_TIME
-        ):
-
-            return
-
-        # ----------------------------------------------------
-        # Text
+        # Get message text
         # ----------------------------------------------------
 
         text = event.raw_text
 
         if not text:
-
             return
 
         # ----------------------------------------------------
-        # IMPORTANT DEBUG
-        #
-        # This proves whether Render receives messages.
+        # DEBUG
         # ----------------------------------------------------
 
         print(
@@ -305,7 +305,7 @@ async def process_message(event):
 
         print(
             f"Time: "
-            f"{message_time.strftime('%H:%M:%S')} IST",
+            f"{message_time.strftime('%Y-%m-%d %H:%M:%S')} IST",
             flush=True,
         )
 
@@ -349,14 +349,15 @@ async def process_message(event):
         if amount not in ALLOWED_AMOUNTS:
 
             print(
-                f"Amount {amount} is NOT in allowed list.",
+                f"Amount {amount} is NOT "
+                f"in the allowed list.",
                 flush=True,
             )
 
             return
 
         # ====================================================
-        # MATCH
+        # MATCH FOUND
         # ====================================================
 
         print(
@@ -376,7 +377,7 @@ async def process_message(event):
 
         print(
             f"Time   : "
-            f"{message_time.strftime('%H:%M:%S')} IST",
+            f"{message_time.strftime('%Y-%m-%d %H:%M:%S')} IST",
             flush=True,
         )
 
@@ -421,12 +422,20 @@ async def telegram_watcher():
                 flush=True,
             )
 
+            # ------------------------------------------------
+            # Connect
+            # ------------------------------------------------
+
             await client.connect()
 
             print(
                 "Telegram transport connected.",
                 flush=True,
             )
+
+            # ------------------------------------------------
+            # Authorization
+            # ------------------------------------------------
 
             authorized = (
                 await client.is_user_authorized()
@@ -440,7 +449,8 @@ async def telegram_watcher():
             if not authorized:
 
                 print(
-                    "❌ TELEGRAM SESSION IS NOT AUTHORIZED",
+                    "❌ TELEGRAM SESSION "
+                    "IS NOT AUTHORIZED",
                     flush=True,
                 )
 
@@ -449,7 +459,7 @@ async def telegram_watcher():
                 return
 
             # ------------------------------------------------
-            # Logged-in account
+            # Account
             # ------------------------------------------------
 
             me = await client.get_me()
@@ -491,9 +501,9 @@ async def telegram_watcher():
                 flush=True,
             )
 
-            # =================================================
-            # REGISTER HANDLER USING RESOLVED ENTITY
-            # =================================================
+            # ------------------------------------------------
+            # Register message listener
+            # ------------------------------------------------
 
             client.add_event_handler(
                 process_message,
@@ -510,7 +520,7 @@ async def telegram_watcher():
             # ------------------------------------------------
 
             print(
-                "Monitoring time: 07:00 - 12:00 IST",
+                "⏰ Monitoring: 24 HOURS",
                 flush=True,
             )
 
@@ -538,12 +548,12 @@ async def telegram_watcher():
             )
 
             print(
-                "👀 Waiting for NEW messages...",
+                "👀 Waiting for messages 24/7...",
                 flush=True,
             )
 
             # ------------------------------------------------
-            # Keep connection alive
+            # Keep Telegram connection alive
             # ------------------------------------------------
 
             await client.run_until_disconnected()
@@ -583,7 +593,7 @@ async def telegram_watcher():
 
 async def main():
 
-    # Start health server
+    # Start Flask health server
     flask_thread = threading.Thread(
         target=run_flask,
         daemon=True,
@@ -591,7 +601,7 @@ async def main():
 
     flask_thread.start()
 
-    # Start Telegram
+    # Start Telegram watcher
     await telegram_watcher()
 
 
