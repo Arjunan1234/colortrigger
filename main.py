@@ -2,6 +2,8 @@ import os
 import re
 import asyncio
 import threading
+import unicodedata
+
 from zoneinfo import ZoneInfo
 
 import requests
@@ -44,6 +46,11 @@ TARGET_TYPES = {
     "EMERD",
 }
 
+
+# =========================================================
+# EXACT ALLOWED AMOUNTS
+# =========================================================
+
 ALLOWED_AMOUNTS = {
     # Group 1
     90,
@@ -66,6 +73,7 @@ ALLOWED_AMOUNTS = {
     243000,
     729000,
 }
+
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -119,6 +127,47 @@ TARGET_ENTITY_ID = None
 
 
 # =========================================================
+# EMOJI EXTRACTOR
+# =========================================================
+
+def extract_emoji(text):
+    """
+    Extract emoji/symbol characters from the text between
+    the message type and the amount.
+
+    Example:
+
+        " 🔴 " -> "🔴"
+        " 🟢 " -> "🟢"
+
+    This also supports other Unicode emoji/symbols.
+    """
+
+    if not text:
+        return ""
+
+    result = []
+
+    for char in text:
+        code = ord(char)
+        category = unicodedata.category(char)
+
+        # Unicode symbol categories
+        if category.startswith("So") or category.startswith("Sk"):
+            result.append(char)
+
+        # Emoji variation selector
+        elif code in range(0xFE00, 0xFE10):
+            result.append(char)
+
+        # Zero-width joiner
+        elif code == 0x200D:
+            result.append(char)
+
+    return "".join(result).strip()
+
+
+# =========================================================
 # PARSER
 # =========================================================
 
@@ -126,21 +175,19 @@ def parse_message(text):
     """
     Detect:
 
-    PARITY 90
-    SAPRE 900
-    BCONE 8100
-    EMERD 72900
+        PARITY 90
+        PARITY 🟢 900
+        SAPRE 🔴 900
+        BCONE 🟢 8100
+        EMERD 🔴 72900
 
     The amount must be one of the exact allowed amounts.
-
-    Example:
-
-    **SAPRE 🔴 900**
 
     Returns:
 
         {
-            "type": "SAPRE",
+            "type": "PARITY",
+            "emoji": "🟢",
             "amount": 900
         }
 
@@ -168,6 +215,7 @@ def parse_message(text):
     # Only search for the amount AFTER the detected type
     remaining_text = normalized[type_match.end():]
 
+    # Find the first number after the type
     amount_match = re.search(
         r"\b(\d+)\b",
         remaining_text,
@@ -182,8 +230,19 @@ def parse_message(text):
     if amount not in ALLOWED_AMOUNTS:
         return None
 
+    # Everything between TYPE and AMOUNT
+    between_type_and_amount = remaining_text[
+        :amount_match.start()
+    ]
+
+    # Extract emoji
+    emoji = extract_emoji(
+        between_type_and_amount
+    )
+
     return {
         "type": message_type,
+        "emoji": emoji,
         "amount": amount,
     }
 
@@ -213,19 +272,22 @@ def send_bot_message(message):
             )
 
             if response.ok:
+
                 print(
                     f"✅ Bot notification sent → {chat_id}",
                     flush=True,
                 )
 
             else:
+
                 print(
                     f"❌ Bot notification failed → {chat_id}",
                     flush=True,
                 )
 
                 print(
-                    f"HTTP {response.status_code}: {response.text}",
+                    f"HTTP {response.status_code}: "
+                    f"{response.text}",
                     flush=True,
                 )
 
@@ -257,19 +319,9 @@ async def process_message(event):
         print(f"Text    : {text}", flush=True)
         print("=" * 60, flush=True)
 
+
         # -------------------------------------------------
-        # IMPORTANT:
-        #
-        # Telethon event.chat_id normally uses peer ID:
-        #
-        # -1001574277898
-        #
-        # while entity.id can be:
-        #
-        # 1574277898
-        #
-        # TARGET_ENTITY_ID is therefore created using
-        # utils.get_peer_id().
+        # TARGET GROUP CHECK
         # -------------------------------------------------
 
         if TARGET_ENTITY_ID is None:
@@ -281,6 +333,7 @@ async def process_message(event):
 
             return
 
+
         if chat_id != TARGET_ENTITY_ID:
 
             print(
@@ -289,6 +342,7 @@ async def process_message(event):
             )
 
             return
+
 
         # -------------------------------------------------
         # TARGET GROUP MESSAGE
@@ -308,6 +362,7 @@ async def process_message(event):
 
             formatted_time = "Unknown time"
 
+
         print(
             "\n🎯 TARGET GROUP MESSAGE",
             flush=True,
@@ -322,6 +377,7 @@ async def process_message(event):
             f"Text : {text}",
             flush=True,
         )
+
 
         # -------------------------------------------------
         # PARSE MESSAGE
@@ -338,8 +394,15 @@ async def process_message(event):
 
             return
 
+
         message_type = parsed["type"]
+        emoji = parsed["emoji"]
         amount = parsed["amount"]
+
+
+        # -------------------------------------------------
+        # MATCH FOUND
+        # -------------------------------------------------
 
         print(
             "\n🚨 MATCH FOUND",
@@ -352,9 +415,41 @@ async def process_message(event):
         )
 
         print(
+            f"Emoji  : {emoji if emoji else 'None'}",
+            flush=True,
+        )
+
+        print(
             f"Amount : {amount}",
             flush=True,
         )
+
+
+        # -------------------------------------------------
+        # CREATE DISPLAY MESSAGE
+        # -------------------------------------------------
+
+        if emoji:
+
+            trigger_text = (
+                f"{message_type} "
+                f"{emoji} "
+                f"{amount}"
+            )
+
+        else:
+
+            trigger_text = (
+                f"{message_type} "
+                f"{amount}"
+            )
+
+
+        print(
+            f"Trigger: {trigger_text}",
+            flush=True,
+        )
+
 
         # -------------------------------------------------
         # NOTIFICATION
@@ -362,16 +457,17 @@ async def process_message(event):
 
         notification = (
             "🚨 COLOR TRIGGER\n\n"
-            f"Type: {message_type}\n"
-            f"Amount: {amount}\n"
-            f"Time: {formatted_time}\n\n"
+            f"{trigger_text}\n\n"
+            f"Time: {formatted_time}\n"
             f"Group: {TARGET_GROUP}"
         )
+
 
         await asyncio.to_thread(
             send_bot_message,
             notification,
         )
+
 
     except Exception as error:
 
@@ -408,6 +504,7 @@ async def test_latest_message(entity):
 
             return
 
+
         latest = messages[0]
 
         latest_text = latest.raw_text or ""
@@ -425,6 +522,7 @@ async def test_latest_message(entity):
         else:
 
             latest_time_string = "Unknown"
+
 
         print(
             "\n📌 LATEST GROUP MESSAGE",
@@ -446,6 +544,7 @@ async def test_latest_message(entity):
             flush=True,
         )
 
+
     except Exception as error:
 
         print(
@@ -462,6 +561,7 @@ async def telegram_watcher():
 
     global TARGET_ENTITY
     global TARGET_ENTITY_ID
+
 
     while True:
 
@@ -485,6 +585,7 @@ async def telegram_watcher():
                     flush=True,
                 )
 
+
             # -------------------------------------------------
             # AUTHORIZATION CHECK
             # -------------------------------------------------
@@ -495,6 +596,7 @@ async def telegram_watcher():
                 f"Telegram authorized: {authorized}",
                 flush=True,
             )
+
 
             if not authorized:
 
@@ -512,6 +614,7 @@ async def telegram_watcher():
 
                 continue
 
+
             # -------------------------------------------------
             # GET ACCOUNT
             # -------------------------------------------------
@@ -524,12 +627,14 @@ async def telegram_watcher():
                 else "No username"
             )
 
+
             print(
                 f"✅ Logged in as: "
                 f"{me.first_name or ''} "
                 f"({username})",
                 flush=True,
             )
+
 
             # -------------------------------------------------
             # FIND TARGET GROUP
@@ -540,9 +645,11 @@ async def telegram_watcher():
                 flush=True,
             )
 
+
             TARGET_ENTITY = await client.get_entity(
                 TARGET_GROUP
             )
+
 
             # -------------------------------------------------
             # IMPORTANT PEER ID FIX
@@ -551,6 +658,7 @@ async def telegram_watcher():
             TARGET_ENTITY_ID = utils.get_peer_id(
                 TARGET_ENTITY
             )
+
 
             print(
                 "\n✅ Group found:",
@@ -562,21 +670,25 @@ async def telegram_watcher():
                 flush=True,
             )
 
+
             print(
                 f"Entity ID: "
                 f"{getattr(TARGET_ENTITY, 'id', 'unknown')}",
                 flush=True,
             )
 
+
             print(
                 f"Peer ID: {TARGET_ENTITY_ID}",
                 flush=True,
             )
 
+
             print(
                 f"Watching group: {TARGET_GROUP}",
                 flush=True,
             )
+
 
             # -------------------------------------------------
             # TEST GROUP ACCESS
@@ -585,6 +697,7 @@ async def telegram_watcher():
             await test_latest_message(
                 TARGET_ENTITY
             )
+
 
             # -------------------------------------------------
             # REMOVE OLD HANDLER
@@ -601,6 +714,7 @@ async def telegram_watcher():
 
                 pass
 
+
             # -------------------------------------------------
             # REGISTER NEW MESSAGE HANDLER
             # -------------------------------------------------
@@ -610,25 +724,30 @@ async def telegram_watcher():
                 events.NewMessage(),
             )
 
+
             print(
                 "\n✅ Message listener registered.",
                 flush=True,
             )
+
 
             print(
                 "⏰ Monitoring: 24 HOURS / 7 DAYS",
                 flush=True,
             )
 
+
             print(
                 f"🎯 Target peer ID: {TARGET_ENTITY_ID}",
                 flush=True,
             )
 
+
             print(
                 "\n👀 Waiting for NEW messages 24/7...",
                 flush=True,
             )
+
 
             print(
                 "Pressing nothing is required. "
@@ -636,23 +755,28 @@ async def telegram_watcher():
                 flush=True,
             )
 
+
             # -------------------------------------------------
             # WAIT FOREVER
             # -------------------------------------------------
 
             await client.run_until_disconnected()
 
+
             print(
                 "\n⚠️ Telegram disconnected.",
                 flush=True,
             )
+
 
             print(
                 "Reconnecting in 10 seconds...",
                 flush=True,
             )
 
+
             await asyncio.sleep(10)
+
 
         except Exception as error:
 
@@ -666,10 +790,12 @@ async def telegram_watcher():
                 flush=True,
             )
 
+
             print(
                 "\n🔄 Retrying in 10 seconds...",
                 flush=True,
             )
+
 
             await asyncio.sleep(10)
 
@@ -695,7 +821,11 @@ async def main():
         flush=True,
     )
 
-    # Start Flask health server
+
+    # -------------------------------------------------
+    # START FLASK HEALTH SERVER
+    # -------------------------------------------------
+
     health_thread = threading.Thread(
         target=start_health_server,
         daemon=True,
@@ -703,14 +833,23 @@ async def main():
 
     health_thread.start()
 
+
     print(
         "🌐 Health server started.",
         flush=True,
     )
 
-    # Start Telegram watcher
+
+    # -------------------------------------------------
+    # START TELEGRAM WATCHER
+    # -------------------------------------------------
+
     await telegram_watcher()
 
+
+# =========================================================
+# START APPLICATION
+# =========================================================
 
 if __name__ == "__main__":
 
