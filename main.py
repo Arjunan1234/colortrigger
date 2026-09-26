@@ -2,13 +2,21 @@ import os
 import re
 import asyncio
 import threading
-from datetime import datetime
 from zoneinfo import ZoneInfo
+
+from dotenv import load_dotenv
 
 import requests
 from flask import Flask
-from telethon import TelegramClient, events
+from telethon import TelegramClient, events, utils
 from telethon.sessions import StringSession
+
+
+# ============================================================
+# LOAD .ENV
+# ============================================================
+
+load_dotenv()
 
 
 # ============================================================
@@ -36,7 +44,7 @@ BOT_CHAT_IDS = [
 
 
 # ============================================================
-# TARGET GROUP
+# TARGET TELEGRAM GROUP
 # ============================================================
 
 TARGET_GROUP = "@colorwizclub2"
@@ -125,6 +133,14 @@ client = TelegramClient(
 
 
 # ============================================================
+# TARGET GROUP INFORMATION
+# ============================================================
+
+TARGET_ENTITY = None
+TARGET_ENTITY_ID = None
+
+
+# ============================================================
 # MESSAGE PARSER
 # ============================================================
 
@@ -133,11 +149,14 @@ def extract_target_content(text):
     if not text:
         return None
 
+    # --------------------------------------------------------
     # Normalize whitespace
+    # --------------------------------------------------------
+
     normalized_text = re.sub(
         r"\s+",
         " ",
-        text
+        text,
     ).strip()
 
     # --------------------------------------------------------
@@ -156,7 +175,7 @@ def extract_target_content(text):
     content_type = type_match.group(1).upper()
 
     # --------------------------------------------------------
-    # Get everything after the target type
+    # Get everything after target type
     # --------------------------------------------------------
 
     text_after_type = normalized_text[
@@ -211,7 +230,8 @@ def send_bot_notification(
         "🚨 ALERT\n\n"
         f"Type: {target_type}\n"
         f"Amount: {amount}\n"
-        f"Time: {message_time.strftime('%H:%M:%S')} IST\n\n"
+        f"Time: "
+        f"{message_time.strftime('%Y-%m-%d %H:%M:%S')} IST\n\n"
         f"{message_text}"
     )
 
@@ -243,6 +263,11 @@ def send_bot_notification(
                 )
 
                 print(
+                    f"Status: {response.status_code}",
+                    flush=True,
+                )
+
+                print(
                     response.text,
                     flush=True,
                 )
@@ -264,60 +289,104 @@ async def process_message(event):
     try:
 
         # ----------------------------------------------------
-        # Telegram message time → IST
+        # Get incoming chat ID
         # ----------------------------------------------------
 
-        message_time = event.message.date.astimezone(IST)
+        chat_id = event.chat_id
 
         # ----------------------------------------------------
-        # IMPORTANT:
-        #
-        # NO TIME FILTER HERE.
-        #
-        # This means:
-        #
-        # 00:00 → monitor
-        # 01:00 → monitor
-        # 02:00 → monitor
-        # ...
-        # 12:00 → monitor
-        # ...
-        # 23:59 → monitor
-        #
-        # 24 HOURS / 7 DAYS
+        # Debug every incoming Telegram message
         # ----------------------------------------------------
 
+        print(
+            "\n📩 NEW TELEGRAM MESSAGE",
+            flush=True,
+        )
+
+        print(
+            f"Incoming Chat ID : {chat_id}",
+            flush=True,
+        )
+
+        print(
+            f"Target Chat ID   : {TARGET_ENTITY_ID}",
+            flush=True,
+        )
+
         # ----------------------------------------------------
-        # Get message text
+        # Check whether this is our target group
+        # ----------------------------------------------------
+
+        if chat_id != TARGET_ENTITY_ID:
+
+            print(
+                "↳ Not the target group. Ignored.",
+                flush=True,
+            )
+
+            return
+
+        # ----------------------------------------------------
+        # Message time → IST
+        # ----------------------------------------------------
+
+        message_time = (
+            event.message.date.astimezone(IST)
+        )
+
+        # ----------------------------------------------------
+        # Message text
         # ----------------------------------------------------
 
         text = event.raw_text
 
         if not text:
+
+            print(
+                "↳ Target group message has no text.",
+                flush=True,
+            )
+
             return
 
-        # ----------------------------------------------------
-        # Debug
-        # ----------------------------------------------------
+        # ====================================================
+        # TARGET GROUP MESSAGE
+        # ====================================================
 
         print(
-            "\n📩 NEW GROUP MESSAGE",
+            "\n"
+            "============================================",
             flush=True,
         )
 
         print(
-            f"Time: "
+            "🎯 TARGET GROUP MESSAGE RECEIVED",
+            flush=True,
+        )
+
+        print(
+            f"Chat ID : {chat_id}",
+            flush=True,
+        )
+
+        print(
+            "Time    : "
             f"{message_time.strftime('%Y-%m-%d %H:%M:%S')} IST",
             flush=True,
         )
 
         print(
-            f"Text: {text}",
+            f"Text    : {text}",
+            flush=True,
+        )
+
+        print(
+            "============================================",
             flush=True,
         )
 
         # ----------------------------------------------------
-        # Extract target type + amount
+        # Parse target
         # ----------------------------------------------------
 
         result = extract_target_content(text)
@@ -325,7 +394,7 @@ async def process_message(event):
         if not result:
 
             print(
-                "Not a target message.",
+                "ℹ️ Not PARITY / SAPRE / BCONE / EMERD.",
                 flush=True,
             )
 
@@ -335,23 +404,23 @@ async def process_message(event):
         amount = result["amount"]
 
         print(
-            f"Detected type: {target_type}",
+            f"Detected type   : {target_type}",
             flush=True,
         )
 
         print(
-            f"Detected amount: {amount}",
+            f"Detected amount : {amount}",
             flush=True,
         )
 
         # ----------------------------------------------------
-        # Check exact allowed amount
+        # Exact amount check
         # ----------------------------------------------------
 
         if amount not in ALLOWED_AMOUNTS:
 
             print(
-                f"Amount {amount} is NOT in allowed list.",
+                f"❌ Amount {amount} is NOT allowed.",
                 flush=True,
             )
 
@@ -377,7 +446,7 @@ async def process_message(event):
         )
 
         print(
-            f"Time   : "
+            "Time   : "
             f"{message_time.strftime('%Y-%m-%d %H:%M:%S')} IST",
             flush=True,
         )
@@ -402,8 +471,111 @@ async def process_message(event):
     except Exception as error:
 
         print(
-            f"❌ PROCESS MESSAGE ERROR: "
-            f"{type(error).__name__}: {error}",
+            "\n❌ PROCESS MESSAGE ERROR",
+            flush=True,
+        )
+
+        print(
+            f"Type : {type(error).__name__}",
+            flush=True,
+        )
+
+        print(
+            f"Error: {error}",
+            flush=True,
+        )
+
+
+# ============================================================
+# TEST GROUP ACCESS
+# ============================================================
+
+async def test_latest_message(entity):
+
+    print(
+        "\n"
+        "============================================",
+        flush=True,
+    )
+
+    print(
+        "🔎 TESTING GROUP ACCESS",
+        flush=True,
+    )
+
+    print(
+        "Reading latest message...",
+        flush=True,
+    )
+
+    try:
+
+        messages = await client.get_messages(
+            entity,
+            limit=1,
+        )
+
+        if not messages:
+
+            print(
+                "⚠️ No messages returned from group.",
+                flush=True,
+            )
+
+            return
+
+        latest = messages[0]
+
+        latest_time = None
+
+        if latest.date:
+
+            latest_time = (
+                latest.date.astimezone(IST)
+            )
+
+        print(
+            "✅ Successfully read latest group message.",
+            flush=True,
+        )
+
+        print(
+            f"Message ID : {latest.id}",
+            flush=True,
+        )
+
+        if latest_time:
+
+            print(
+                "Time       : "
+                f"{latest_time.strftime('%Y-%m-%d %H:%M:%S')} IST",
+                flush=True,
+            )
+
+        print(
+            f"Text       : {latest.raw_text}",
+            flush=True,
+        )
+
+        print(
+            "============================================",
+            flush=True,
+        )
+
+    except Exception as error:
+
+        print(
+            "❌ FAILED TO READ LATEST GROUP MESSAGE",
+            flush=True,
+        )
+
+        print(
+            f"Type : {type(error).__name__}",
+            flush=True,
+        )
+
+        print(
+            f"Error: {error}",
             flush=True,
         )
 
@@ -414,16 +586,25 @@ async def process_message(event):
 
 async def telegram_watcher():
 
+    global TARGET_ENTITY
+    global TARGET_ENTITY_ID
+
     while True:
 
         try:
 
             print(
-                "🔌 Connecting to Telegram...",
+                "\n🔌 Connecting to Telegram...",
                 flush=True,
             )
 
-            await client.connect()
+            # ------------------------------------------------
+            # Connect
+            # ------------------------------------------------
+
+            if not client.is_connected():
+
+                await client.connect()
 
             print(
                 "✅ Telegram transport connected.",
@@ -431,7 +612,7 @@ async def telegram_watcher():
             )
 
             # ------------------------------------------------
-            # Check authorization
+            # Authorization
             # ------------------------------------------------
 
             authorized = (
@@ -446,7 +627,13 @@ async def telegram_watcher():
             if not authorized:
 
                 print(
+                    "\n"
                     "❌ TELEGRAM SESSION IS NOT AUTHORIZED",
+                    flush=True,
+                )
+
+                print(
+                    "Please generate a new Telegram session.",
                     flush=True,
                 )
 
@@ -455,7 +642,7 @@ async def telegram_watcher():
                 return
 
             # ------------------------------------------------
-            # Get logged-in account
+            # Logged-in account
             # ------------------------------------------------
 
             me = await client.get_me()
@@ -481,6 +668,16 @@ async def telegram_watcher():
                 TARGET_GROUP
             )
 
+            TARGET_ENTITY = entity
+
+            # IMPORTANT:
+            # Convert Telegram entity ID to the same peer ID
+            # format used by incoming events.
+
+            TARGET_ENTITY_ID = utils.get_peer_id(
+                entity
+            )
+
             print(
                 f"✅ Group found: "
                 f"{getattr(entity, 'title', TARGET_GROUP)}",
@@ -488,7 +685,12 @@ async def telegram_watcher():
             )
 
             print(
-                f"Group ID: {entity.id}",
+                f"Entity ID: {entity.id}",
+                flush=True,
+            )
+
+            print(
+                f"Peer ID  : {TARGET_ENTITY_ID}",
                 flush=True,
             )
 
@@ -497,17 +699,38 @@ async def telegram_watcher():
                 flush=True,
             )
 
+            # ------------------------------------------------
+            # Test latest message
+            # ------------------------------------------------
+
+            await test_latest_message(entity)
+
             # =================================================
-            # REGISTER MESSAGE LISTENER
+            # REMOVE OLD HANDLER
+            # =================================================
+
+            try:
+
+                client.remove_event_handler(
+                    process_message,
+                    events.NewMessage,
+                )
+
+            except Exception:
+
+                pass
+
+            # =================================================
+            # REGISTER GLOBAL NEW MESSAGE LISTENER
             # =================================================
 
             client.add_event_handler(
                 process_message,
-                events.NewMessage(chats=entity),
+                events.NewMessage(),
             )
 
             print(
-                "✅ Message listener registered.",
+                "✅ Global Telegram message listener registered.",
                 flush=True,
             )
 
@@ -516,12 +739,38 @@ async def telegram_watcher():
             # =================================================
 
             print(
+                "\n"
+                "============================================",
+                flush=True,
+            )
+
+            print(
+                "🚀 WATCHER READY",
+                flush=True,
+            )
+
+            print(
                 "⏰ Monitoring: 24 HOURS / 7 DAYS",
                 flush=True,
             )
 
             print(
                 "🌐 Timezone: Asia/Kolkata (IST)",
+                flush=True,
+            )
+
+            print(
+                f"🎯 Target group: {TARGET_GROUP}",
+                flush=True,
+            )
+
+            print(
+                f"🎯 Entity ID: {entity.id}",
+                flush=True,
+            )
+
+            print(
+                f"🎯 Peer ID: {TARGET_ENTITY_ID}",
                 flush=True,
             )
 
@@ -549,26 +798,40 @@ async def telegram_watcher():
             )
 
             print(
-                "👀 Waiting for NEW messages 24/7...",
+                "👀 Waiting for NEW Telegram messages...",
                 flush=True,
             )
 
-            # =================================================
-            # KEEP TELEGRAM CONNECTION ALIVE
-            # =================================================
+            print(
+                "============================================",
+                flush=True,
+            )
+
+            # ------------------------------------------------
+            # Keep connection alive
+            # ------------------------------------------------
 
             await client.run_until_disconnected()
 
             print(
-                "⚠️ Telegram disconnected.",
+                "\n⚠️ Telegram disconnected.",
                 flush=True,
             )
 
         except Exception as error:
 
             print(
-                f"❌ TELEGRAM ERROR: "
-                f"{type(error).__name__}: {error}",
+                "\n❌ TELEGRAM WATCHER ERROR",
+                flush=True,
+            )
+
+            print(
+                f"Type : {type(error).__name__}",
+                flush=True,
+            )
+
+            print(
+                f"Error: {error}",
                 flush=True,
             )
 
@@ -630,6 +893,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
 
         print(
-            "Application stopped.",
+            "\nApplication stopped.",
             flush=True,
         )
