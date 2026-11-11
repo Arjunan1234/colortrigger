@@ -58,6 +58,10 @@ ALLOWED_AMOUNTS = {
     810,
     2430,
     7290,
+    21870,
+    65610,
+    196830,
+    590490,
 
     # Group 2
     900,
@@ -65,6 +69,10 @@ ALLOWED_AMOUNTS = {
     8100,
     24300,
     72900,
+    218700,
+    656100,
+    1968300,
+    5904900,
 
     # Group 3
     9000,
@@ -72,6 +80,16 @@ ALLOWED_AMOUNTS = {
     81000,
     243000,
     729000,
+    2187000,
+    6561000,
+    19683000,
+    59049000,
+
+    # Special amounts
+    100000,   # 1L
+    500000,   # 5L
+    1000000,  # 10L
+    2500000,  # 25L
 }
 
 
@@ -313,35 +331,23 @@ async def process_message(event):
 
         text = message.raw_text or ""
 
-        print("\n" + "=" * 60, flush=True)
-        print("📩 NEW TELEGRAM MESSAGE", flush=True)
-        print(f"Chat ID : {chat_id}", flush=True)
-        print(f"Text    : {text}", flush=True)
-        print("=" * 60, flush=True)
-
 
         # -------------------------------------------------
         # TARGET GROUP CHECK
         # -------------------------------------------------
 
         if TARGET_ENTITY_ID is None:
-
-            print(
-                "⚠️ TARGET_ENTITY_ID is not initialized yet.",
-                flush=True,
-            )
-
             return
-
 
         if chat_id != TARGET_ENTITY_ID:
-
-            print(
-                "↪️ Ignored: message is from another chat.",
-                flush=True,
-            )
-
             return
+
+
+        print("\n" + "=" * 60, flush=True)
+        print("📩 NEW TELEGRAM MESSAGE", flush=True)
+        print(f"Chat ID : {chat_id}", flush=True)
+        print(f"Text    : {text}", flush=True)
+        print("=" * 60, flush=True)
 
 
         # -------------------------------------------------
